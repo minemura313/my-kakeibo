@@ -18,129 +18,110 @@ def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
 # --- メイン UI ---
-st.set_page_config(page_title="シンプル家計簿", layout="wide")
-st.title("💰 家計簿アプリ")
+st.set_page_config(page_title="ポケ家計簿", layout="centered") # スマホで見やすい中央寄せ
+
+# スマホで押しやすいようにCSSでボタンを大きくする
+st.markdown("""
+    <style>
+    div.stButton > button {
+        width: 100%;
+        height: 3em;
+        font-size: 18px !important;
+        font-weight: bold;
+        border-radius: 10px;
+        margin-bottom: 10px;
+    }
+    .stMetric {
+        background-color: #262730;
+        padding: 15px;
+        border-radius: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("💰 ポケ家計簿")
 
 df = load_data()
 
-# --- サイドバー ---
-with st.sidebar:
-    tab1, tab2 = st.tabs(["新規入力", "データの編集"])
-    
-    with tab1:
-        st.header("新規入力")
-        date = st.date_input("日付", datetime.date.today(), key="add_date")
-        category = st.selectbox("カテゴリー", ["食費", "日用品", "趣味・娯楽", "交通費", "通信費", "その他"], key="add_cat")
-        amount = st.number_input("金額 (円)", min_value=0, step=10, key="add_amount")
-        
-        if st.button("追加"):
-            new_data = pd.DataFrame([[pd.to_datetime(date), category, amount]], 
-                                    columns=["日付", "カテゴリー", "金額"])
-            df = pd.concat([df, new_data], ignore_index=True)
-            save_data(df)
-            st.success("追加しました！")
-            st.rerun()
+# --- メイン画面をタブで管理（スマホの親指操作を意識） ---
+tab_input, tab_chart, tab_history = st.tabs(["＋ 入力", "📊 分析", "📜 履歴"])
 
-    with tab2:
-        st.header("データの修正・削除")
-        if not df.empty:
-            edit_idx = st.selectbox(
-                "修正するデータを選択", 
-                df.index, 
-                format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']} ({df.loc[i, '金額']}円)"
-            )
-            
+with tab_input:
+    st.header("クイック入力")
+    date = st.date_input("日付", datetime.date.today())
+    category = st.radio(
+        "カテゴリー", 
+        ["食費", "日用品", "趣味・娯楽", "交通費", "通信費", "その他"],
+        horizontal=True # スマホで選択しやすい横並び
+    )
+    amount = st.number_input("金額 (円)", min_value=0, step=100, format="%d")
+    
+    if st.button("記録する"):
+        new_data = pd.DataFrame([[pd.to_datetime(date), category, amount]], 
+                                columns=["日付", "カテゴリー", "金額"])
+        df = pd.concat([df, new_data], ignore_index=True)
+        save_data(df)
+        st.success("保存しました！")
+        st.rerun()
+
+with tab_chart:
+    if not df.empty:
+        # サマリー
+        df['年月'] = df['日付'].dt.strftime('%Y-%m')
+        current_month = datetime.date.today().strftime('%Y-%m')
+        monthly_total = df[df['年月'] == current_month]['金額'].sum()
+        
+        st.metric(f"{current_month} の支出", f"{monthly_total:,} 円")
+        
+        # 円グラフ
+        category_sum = df.groupby("カテゴリー")["金額"].sum().reset_index()
+        fig = px.pie(category_sum, values='金額', names='カテゴリー', color='カテゴリー', hole=0.5)
+        fig.update_traces(textposition='inside', textinfo='label+value')
+        fig.update_layout(showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+        st.plotly_chart(fig, width="stretch")
+        
+        st.table(category_sum.set_index("カテゴリー")["金額"].map("{:,}円".format))
+    else:
+        st.info("データがありません")
+
+with tab_history:
+    st.header("履歴の編集")
+    if not df.empty:
+        # 修正・削除
+        edit_idx = st.selectbox(
+            "修正するデータを選択", 
+            df.index, 
+            format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']} ({df.loc[i, '金額']}円)"
+        )
+        
+        with st.expander("選択中のデータを編集"):
             row = df.loc[edit_idx]
-            new_date = st.date_input("日付を変更", row["日付"], key="edit_date")
-            new_cat = st.selectbox(
-                "カテゴリーを変更", 
-                ["食費", "日用品", "趣味・娯楽", "交通費", "通信費", "その他"], 
-                index=["食費", "日用品", "趣味・娯楽", "交通費", "通信費", "その他"].index(row["カテゴリー"]), 
-                key="edit_cat"
-            )
-            new_amount = st.number_input("金額を変更", value=int(row["金額"]), min_value=0, step=10, key="edit_amount")
+            new_date = st.date_input("日付修正", row["日付"], key="ed")
+            new_cat = st.selectbox("カテゴリ修正", ["食費", "日用品", "趣味・娯楽", "交通費", "通信費", "その他"], 
+                                   index=["食費", "日用品", "趣味・娯楽", "交通費", "通信費", "その他"].index(row["カテゴリー"]), key="ec")
+            new_amount = st.number_input("金額修正", value=int(row["金額"]), min_value=0, step=10, key="ea")
             
-            col_u, col_d = st.columns(2)
-            if col_u.button("更新"):
+            if st.button("更新"):
                 df.at[edit_idx, "日付"] = pd.to_datetime(new_date)
                 df.at[edit_idx, "カテゴリー"] = new_cat
                 df.at[edit_idx, "金額"] = new_amount
                 save_data(df)
-                st.success("更新しました！")
                 st.rerun()
             
-            if col_d.button("この行を削除"):
+            if st.button("このデータを削除"):
                 df = df.drop(edit_idx)
                 save_data(df)
-                st.warning("削除しました。")
                 st.rerun()
-        else:
-            st.write("データがありません")
-
-# --- メインエリア ---
-if not df.empty:
-    # データの加工
-    df['年月'] = df['日付'].dt.strftime('%Y-%m')
-    current_month = datetime.date.today().strftime('%Y-%m')
-    
-    monthly_total = df[df['年月'] == current_month]['金額'].sum()
-    total_spent = df["金額"].sum()
-
-    # サマリー表示
-    st.subheader("📊 収支サマリー")
-    m_col1, m_col2 = st.columns(2)
-    with m_col1:
-        st.metric(f"今月 ({current_month}) の支出", f"{monthly_total:,} 円")
-    with m_col2:
-        st.metric("累計の総支出", f"{total_spent:,} 円")
-    
-    st.divider()
-
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📋 履歴")
+        
+        st.divider()
         st.dataframe(df.sort_values("日付", ascending=False), width="stretch")
+    else:
+        st.write("データがありません")
 
-    with col2:
-        st.subheader("🏷️ 種類別の合計")
-        category_sum = df.groupby("カテゴリー")["金額"].sum().reset_index()
-        
-        # 表の表示
-        st.table(category_sum.set_index("カテゴリー")["金額"].map("{:,}円".format))
-        
-        # 円グラフの作成（金額表示＋真ん中に合計）
-        fig = px.pie(
-            category_sum, 
-            values='金額', 
-            names='カテゴリー', 
-            color='カテゴリー',
-            hole=0.5
-        )
-        
-        # 表示設定：パーセントではなく「ラベル＋金額」を表示
-        fig.update_traces(
-            textposition='inside', 
-            textinfo='label+value',
-            hovertemplate='%{label}<br>%{value:,}円'
-        )
-        
-        # グラフの真ん中に合計金額を表示
-        fig.add_annotation(
-            text=f"累計合計<br><b>{total_spent:,}円</b>",
-            showarrow=False,
-            font_size=18
-        )
-
-        fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0))
-        
-        # 最新の書き方 width="stretch"
-        st.plotly_chart(fig, width="stretch")
-
-    st.divider()
-    if st.button("全データを削除（リセット）"):
+# サイドバーは設定用として残す
+with st.sidebar:
+    st.subheader("設定")
+    if st.button("全データをリセット"):
         if os.path.exists(DATA_FILE):
             os.remove(DATA_FILE)
             st.rerun()
-else:
-    st.info("まだデータがありません。サイドバーから入力してください。")
