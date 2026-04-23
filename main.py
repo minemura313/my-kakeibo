@@ -32,34 +32,20 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        # キャッシュなしで読み込み
         df = conn.read(ttl=0) 
-        
         if df is None or df.empty:
             return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
-            
-        # 列名の空白削除
         df.columns = df.columns.str.strip()
-        
-        # 必要な列のみ抽出
         df = df[["日付", "カテゴリー", "金額"]].dropna(how='all')
-        
-        # 【重要】日付の読み込みエラー対策： mixed を指定して自動判別させる
         df["日付"] = pd.to_datetime(df["日付"], errors='coerce', format='mixed')
-        
-        # 金額を整数に変換
         df["金額"] = pd.to_numeric(df["金額"], errors='coerce').fillna(0).astype(int)
-        
-        return df.dropna(subset=["日付"]) # 日付が変換できなかった行は除外
+        return df.dropna(subset=["日付"])
     except Exception as e:
-        st.error(f"読み込みエラー: {e}")
         return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
 
 def save_data(df_to_save):
     try:
-        # 計算用の列を消して保存
         df_clean = df_to_save.drop(columns=['年月'], errors='ignore')
-        # 日付を標準的な文字列形式に戻して保存（ゆれを防ぐため）
         df_clean["日付"] = df_clean["日付"].dt.strftime('%Y-%m-%d')
         conn.update(worksheet="Sheet1", data=df_clean)
         st.success("スプレッドシートに保存しました！")
@@ -84,22 +70,40 @@ tab_input, tab_chart, tab_history = st.tabs(["＋ 入力", "📊 分析", "📜 
 with tab_input:
     st.subheader("クイック入力")
     date = st.date_input("日付", datetime.date.today())
-    category = st.radio("カテゴリー", ["食費", "日用品", "趣味", "交通費", "通信費","ジム", "その他"], horizontal=True)
+    # ジムを追加したカテゴリー
+    category = st.radio("カテゴリー", ["食費", "日用品", "趣味", "交通費", "通信費", "ジム", "その他"], horizontal=True)
     amount = st.number_input("金額 (円)", min_value=0, step=100, value=None, placeholder="金額を入力...")
     
     if st.button("記録を保存する"):
         if amount is not None and amount > 0:
             new_row = pd.DataFrame([[pd.to_datetime(date), category, int(amount)]], 
                                     columns=["日付", "カテゴリー", "金額"])
-            # 既存データと合体
             df_updated = pd.concat([df, new_row], ignore_index=True)
             save_data(df_updated)
             st.rerun()
 
 with tab_chart:
     if not df.empty:
+        st.subheader("カテゴリー別支出")
         category_sum = df.groupby("カテゴリー")["金額"].sum().reset_index()
-        fig = px.pie(category_sum, values='金額', names='カテゴリー', hole=0.5)
+        
+        # グラフ作成
+        fig = px.pie(
+            category_sum, 
+            values='金額', 
+            names='カテゴリー', 
+            hole=0.5,
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        
+        # 【修正ポイント】textinfoを 'label+value' にして金額を表示
+        fig.update_traces(
+            textinfo='label+value', 
+            texttemplate='%{label}<br>%{value:,}円', # ラベルとカンマ区切り金額
+            textfont_size=14
+        )
+        
+        fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.write("データがありません")
@@ -107,10 +111,9 @@ with tab_chart:
 with tab_history:
     if not df.empty:
         st.dataframe(df.sort_values("日付", ascending=False), use_container_width=True)
-        
         st.divider()
         edit_idx = st.selectbox("削除するデータを選択", df.index, 
-                                format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']}")
+                                format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']} ({int(df.loc[i, '金額']):,}円)")
         if st.button("選択したデータを削除"):
             save_data(df.drop(edit_idx))
             st.rerun()
