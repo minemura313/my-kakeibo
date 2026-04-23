@@ -84,7 +84,7 @@ tab_input, tab_chart, tab_history = st.tabs(["＋ 入力", "📊 分析", "📜 
 with tab_input:
     st.subheader("クイック入力")
     date = st.date_input("日付", datetime.date.today())
-    category = st.radio("カテゴリー", ["食費", "日用品", "趣味", "交通費", "通信費", "その他"], horizontal=True)
+    category = st.radio("カテゴリー", ["食費", "日用品", "趣味", "交通費", "通信費","ジム", "その他"], horizontal=True)
     amount = st.number_input("金額 (円)", min_value=0, step=100, value=None, placeholder="金額を入力...")
     
     if st.button("記録を保存する"):
