@@ -34,25 +34,41 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        df = conn.read(ttl=0)
-        if not df.empty:
-            df["日付"] = pd.to_datetime(df["日付"])
-            # 金額を整数型に変換（小数点を消す）
-            df["金額"] = pd.to_numeric(df["金額"], errors='coerce').fillna(0).astype(int)
+        # ttl=0 でキャッシュを無効化し、常に最新のスプレッドシートを読み込む
+        df = conn.read(ttl=0) 
+        
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
+            
+        # 列名の前後の空白を削除
+        df.columns = df.columns.str.strip()
+        
+        # 必要な列だけを抽出（余計な空列を無視）
+        df = df[["日付", "カテゴリー", "金額"]].dropna(how='all')
+        
+        # 型のクリーンアップ
+        df["日付"] = pd.to_datetime(df["日付"])
+        df["金額"] = pd.to_numeric(df["金額"], errors='coerce').fillna(0).astype(int)
+        
         return df
-    except:
+    except Exception as e:
+        # 接続エラー時は空のデータを返す
         return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
 
-def save_data(df):
-    conn.update(data=df)
+def save_data(df_to_save):
+    # 年月などの計算用列を除外して保存
+    df_clean = df_to_save.drop(columns=['年月'], errors='ignore')
+    # Sheet1 というシート名に対して上書き保存
+    conn.update(worksheet="Sheet1", data=df_clean)
 
+# データの読み込み
 df = load_data()
 
-# --- 集計表示 ---
+# --- 集計表示（今月の合計） ---
 if not df.empty:
     df['年月'] = df['日付'].dt.strftime('%Y-%m')
     current_month = datetime.date.today().strftime('%Y-%m')
-    monthly_total = int(df[df['年月'] == current_month]['金額'].sum()) # 整数に変換
+    monthly_total = int(df[df['年月'] == current_month]['金額'].sum())
     st.metric(f"{current_month} の支出合計", f"{monthly_total:,} 円")
     st.write("")
 else:
@@ -69,16 +85,23 @@ with tab_input:
         ["食費", "日用品", "趣味", "交通費", "通信費", "その他"],
         horizontal=True
     )
-    # 金額の初期値を None にして 0 を表示させない
+    # 0を表示させない設定
     amount = st.number_input("金額 (円)", min_value=0, step=100, format="%d", value=None, placeholder="金額を入力...")
     
     if st.button("記録を保存する"):
         if amount is not None and amount > 0:
-            new_data = pd.DataFrame([[date.strftime('%Y-%m-%d'), category, int(amount)]], 
+            # 新しい行を作成
+            new_row = pd.DataFrame([[date.strftime('%Y-%m-%d'), category, int(amount)]], 
                                     columns=["日付", "カテゴリー", "金額"])
-            df_to_save = pd.concat([df.drop(columns=['年月'], errors='ignore'), new_data], ignore_index=True)
-            save_data(df_to_save)
+            
+            # 既存データに結合（年月列は除く）
+            df_for_concat = df.drop(columns=['年月'], errors='ignore')
+            df_updated = pd.concat([df_for_concat, new_row], ignore_index=True)
+            
+            # 保存
+            save_data(df_updated)
             st.success("保存しました！")
+            # 画面を更新して最新データを反映
             st.rerun()
         else:
             st.warning("金額を入力してください")
@@ -108,7 +131,8 @@ with tab_chart:
 with tab_history:
     st.header("履歴の編集")
     if not df.empty:
-        st.dataframe(df.sort_values("日付", ascending=False), width="stretch")
+        # 最新順に表示
+        st.dataframe(df.sort_values("日付", ascending=False), use_container_width=True)
         
         st.divider()
         edit_idx = st.selectbox(
@@ -118,8 +142,8 @@ with tab_history:
         )
         
         if st.button("選択したデータを削除"):
-            df_to_save = df.drop(edit_idx).drop(columns=['年月'], errors='ignore')
-            save_data(df_to_save)
+            df_remaining = df.drop(edit_idx)
+            save_data(df_remaining)
             st.success("削除しました")
             st.rerun()
     else:
@@ -128,6 +152,7 @@ with tab_history:
 with st.sidebar:
     st.subheader("設定")
     if st.button("全データをリセット"):
+        # 見出しのみの空のデータで上書き
         reset_df = pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
         save_data(reset_df)
         st.rerun()
