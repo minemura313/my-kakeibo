@@ -7,7 +7,7 @@ import plotly.express as px
 # --- UI設定 ---
 st.set_page_config(page_title="ポケ家計簿", layout="centered")
 
-# スマホ向けカスタムCSS（元のデザインを維持）
+# スマホ向けカスタムCSS
 st.markdown("""
     <style>
     .stApp { background-color: #f8f9fa; color: #212529; }
@@ -34,26 +34,25 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        # スプレッドシートから読み込み（キャッシュを無効化して常に最新を取得）
         df = conn.read(ttl=0)
-        # 日付列を日時型に変換
         if not df.empty:
             df["日付"] = pd.to_datetime(df["日付"])
+            # 金額を整数型に変換（小数点を消す）
+            df["金額"] = pd.to_numeric(df["金額"], errors='coerce').fillna(0).astype(int)
         return df
     except:
         return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
 
 def save_data(df):
-    # スプレッドシートを更新
     conn.update(data=df)
 
 df = load_data()
 
-# --- アプリ起動時にすぐ見える集計表示 ---
+# --- 集計表示 ---
 if not df.empty:
     df['年月'] = df['日付'].dt.strftime('%Y-%m')
     current_month = datetime.date.today().strftime('%Y-%m')
-    monthly_total = df[df['年月'] == current_month]['金額'].sum()
+    monthly_total = int(df[df['年月'] == current_month]['金額'].sum()) # 整数に変換
     st.metric(f"{current_month} の支出合計", f"{monthly_total:,} 円")
     st.write("")
 else:
@@ -70,17 +69,16 @@ with tab_input:
         ["食費", "日用品", "趣味", "交通費", "通信費", "その他"],
         horizontal=True
     )
-    amount = st.number_input("金額 (円)", min_value=0, step=100, format="%d")
+    # 金額の初期値を None にして 0 を表示させない
+    amount = st.number_input("金額 (円)", min_value=0, step=100, format="%d", value=None, placeholder="金額を入力...")
     
     if st.button("記録を保存する"):
-        if amount > 0:
-            # 新しい行を作成（日付を文字列に変換して保存）
-            new_data = pd.DataFrame([[date.strftime('%Y-%m-%d'), category, amount]], 
+        if amount is not None and amount > 0:
+            new_data = pd.DataFrame([[date.strftime('%Y-%m-%d'), category, int(amount)]], 
                                     columns=["日付", "カテゴリー", "金額"])
-            # 既存のデータに結合
             df_to_save = pd.concat([df.drop(columns=['年月'], errors='ignore'), new_data], ignore_index=True)
             save_data(df_to_save)
-            st.success("スプレッドシートに保存しました！")
+            st.success("保存しました！")
             st.rerun()
         else:
             st.warning("金額を入力してください")
@@ -116,7 +114,7 @@ with tab_history:
         edit_idx = st.selectbox(
             "削除するデータを選択", 
             df.index, 
-            format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']} ({df.loc[i, '金額']}円)"
+            format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']} ({int(df.loc[i, '金額']):,}円)"
         )
         
         if st.button("選択したデータを削除"):
@@ -130,7 +128,6 @@ with tab_history:
 with st.sidebar:
     st.subheader("設定")
     if st.button("全データをリセット"):
-        # 空のデータフレームで上書き
         reset_df = pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
         save_data(reset_df)
         st.rerun()
