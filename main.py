@@ -37,12 +37,13 @@ def load_data():
             return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
         df.columns = df.columns.str.strip()
         df = df[["日付", "カテゴリー", "金額"]].dropna(how='all')
+        # 日付形式のゆれを吸収
         df["日付"] = pd.to_datetime(df["日付"], errors='coerce', format='mixed')
         df["金額"] = pd.to_numeric(df["金額"], errors='coerce').fillna(0).astype(int)
         df = df.dropna(subset=["日付"])
         df['年月'] = df['日付'].dt.strftime('%Y-%m')
         return df
-    except Exception as e:
+    except Exception:
         return pd.DataFrame(columns=["日付", "カテゴリー", "金額", "年月"])
 
 def save_data(df_to_save):
@@ -88,10 +89,25 @@ tab_input, tab_chart, tab_history = st.tabs(["＋ 入力", "📊 分析", "📜 
 with tab_input:
     st.subheader("クイック入力")
     date = st.date_input("日付", datetime.date.today())
+    # カテゴリーに「ジム」を追加
     category = st.radio("カテゴリー", ["食費", "日用品", "趣味", "交通費", "通信費", "ジム", "その他"], horizontal=True)
     
-    # 【修正ポイント】金額入力に key を設定
-    amount = st.number_input(
+    # 入力欄をクリアするためのコールバック関数
+    def handle_save():
+        amt = st.session_state.amount_input
+        if amt is not None and amt > 0:
+            new_row = pd.DataFrame([[pd.to_datetime(date), category, int(amt)]], 
+                                    columns=["日付", "カテゴリー", "金額"])
+            df_for_save = df.drop(columns=['年月'], errors='ignore')
+            df_updated = pd.concat([df_for_save, new_row], ignore_index=True)
+            save_data(df_updated)
+            # 成功時に入力値をクリア
+            st.session_state.amount_input = None
+        else:
+            st.warning("金額を入力してください")
+
+    # 金額入力欄
+    st.number_input(
         "金額 (円)", 
         min_value=0, 
         step=100, 
@@ -100,26 +116,20 @@ with tab_input:
         key="amount_input"
     )
     
-    if st.button("記録を保存する"):
-        if amount is not None and amount > 0:
-            new_row = pd.DataFrame([[pd.to_datetime(date), category, int(amount)]], 
-                                    columns=["日付", "カテゴリー", "金額"])
-            df_for_save = df.drop(columns=['年月'], errors='ignore')
-            df_updated = pd.concat([df_for_save, new_row], ignore_index=True)
-            save_data(df_updated)
-            
-            # 【修正ポイント】保存成功後にセッション状態の金額をクリアしてリロード
-            if "amount_input" in st.session_state:
-                st.session_state["amount_input"] = None
-            st.rerun()
-        else:
-            st.warning("金額を入力してください")
+    # ボタン押下時に handle_save を実行
+    st.button("記録を保存する", on_click=handle_save)
 
 with tab_chart:
     if not display_df.empty:
+        st.subheader(f"{selected_month} の支出内訳")
         category_sum = display_df.groupby("カテゴリー")["金額"].sum().reset_index()
         fig = px.pie(category_sum, values='金額', names='カテゴリー', hole=0.5)
-        fig.update_traces(textinfo='label+value', texttemplate='%{label}<br>%{value:,}円')
+        # パーセントではなく金額を表示する設定
+        fig.update_traces(
+            textinfo='label+value', 
+            texttemplate='%{label}<br>%{value:,}円',
+            textfont_size=14
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 with tab_history:
