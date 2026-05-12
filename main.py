@@ -39,30 +39,54 @@ def load_data():
         df = df[["日付", "カテゴリー", "金額"]].dropna(how='all')
         df["日付"] = pd.to_datetime(df["日付"], errors='coerce', format='mixed')
         df["金額"] = pd.to_numeric(df["金額"], errors='coerce').fillna(0).astype(int)
-        return df.dropna(subset=["日付"])
+        df = df.dropna(subset=["日付"])
+        # 集計用に年月列を作成
+        df['年月'] = df['日付'].dt.strftime('%Y-%m')
+        return df
     except Exception as e:
-        return pd.DataFrame(columns=["日付", "カテゴリー", "金額"])
+        return pd.DataFrame(columns=["日付", "カテゴリー", "金額", "年月"])
 
 def save_data(df_to_save):
     try:
+        # 保存時は年月列を外す
         df_clean = df_to_save.drop(columns=['年月'], errors='ignore')
         df_clean["日付"] = df_clean["日付"].dt.strftime('%Y-%m-%d')
         conn.update(worksheet="Sheet1", data=df_clean)
-        st.success("スプレッドシートに保存しました！")
+        st.success("スプレッドシートを更新しました！")
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
 # データの読み込み
 df = load_data()
 
-# --- 集計・表示 ---
-if not df.empty:
-    df['年月'] = df['日付'].dt.strftime('%Y-%m')
-    current_month = datetime.date.today().strftime('%Y-%m')
-    monthly_total = int(df[df['年月'] == current_month]['金額'].sum())
-    st.metric(f"{current_month} の支出合計", f"{monthly_total:,} 円")
+# --- サイドバー：月選択機能 ---
+with st.sidebar:
+    st.header("表示設定")
+    if not df.empty:
+        # スプレッドシートにある年月をリスト化（降順）
+        month_list = sorted(df['年月'].unique(), reverse=True)
+        # 今月を初期値にする（リストになければ最新の月）
+        current_month_str = datetime.date.today().strftime('%Y-%m')
+        default_index = month_list.index(current_month_str) if current_month_str in month_list else 0
+        
+        selected_month = st.selectbox("表示する月を選択", month_list, index=default_index)
+        # 選択された月のデータだけに絞り込む
+        display_df = df[df['年月'] == selected_month]
+    else:
+        st.write("データがありません")
+        display_df = df
+
+    st.divider()
+    if st.button("全データをリセット"):
+        save_data(pd.DataFrame(columns=["日付", "カテゴリー", "金額"]))
+        st.rerun()
+
+# --- メイン表示 ---
+if not display_df.empty:
+    monthly_total = int(display_df['金額'].sum())
+    st.metric(f"{selected_month} の支出合計", f"{monthly_total:,} 円")
 else:
-    st.info("データがありません。入力を開始しましょう！")
+    st.info(f"{selected_month if 'selected_month' in locals() else ''} のデータはありません。")
 
 # --- タブ ---
 tab_input, tab_chart, tab_history = st.tabs(["＋ 入力", "📊 分析", "📜 履歴"])
@@ -70,7 +94,6 @@ tab_input, tab_chart, tab_history = st.tabs(["＋ 入力", "📊 分析", "📜 
 with tab_input:
     st.subheader("クイック入力")
     date = st.date_input("日付", datetime.date.today())
-    # ジムを追加したカテゴリー
     category = st.radio("カテゴリー", ["食費", "日用品", "趣味", "交通費", "通信費", "ジム", "その他"], horizontal=True)
     amount = st.number_input("金額 (円)", min_value=0, step=100, value=None, placeholder="金額を入力...")
     
@@ -78,47 +101,36 @@ with tab_input:
         if amount is not None and amount > 0:
             new_row = pd.DataFrame([[pd.to_datetime(date), category, int(amount)]], 
                                     columns=["日付", "カテゴリー", "金額"])
-            df_updated = pd.concat([df, new_row], ignore_index=True)
+            # 年月列を除いた全データと合体させて保存
+            df_updated = pd.concat([df.drop(columns=['年月'], errors='ignore'), new_row], ignore_index=True)
             save_data(df_updated)
             st.rerun()
 
 with tab_chart:
-    if not df.empty:
-        st.subheader("カテゴリー別支出")
-        category_sum = df.groupby("カテゴリー")["金額"].sum().reset_index()
-        
-        # グラフ作成
-        fig = px.pie(
-            category_sum, 
-            values='金額', 
-            names='カテゴリー', 
-            hole=0.5,
-            color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        
-        # 【修正ポイント】textinfoを 'label+value' にして金額を表示
+    if not display_df.empty:
+        st.subheader(f"{selected_month} のカテゴリー別支出")
+        category_sum = display_df.groupby("カテゴリー")["金額"].sum().reset_index()
+        fig = px.pie(category_sum, values='金額', names='カテゴリー', hole=0.5)
         fig.update_traces(
             textinfo='label+value', 
-            texttemplate='%{label}<br>%{value:,}円', # ラベルとカンマ区切り金額
+            texttemplate='%{label}<br>%{value:,}円',
             textfont_size=14
         )
-        
-        fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0))
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.write("データがありません")
+        st.write("この月のデータはありません")
 
 with tab_history:
-    if not df.empty:
-        st.dataframe(df.sort_values("日付", ascending=False), use_container_width=True)
+    if not display_df.empty:
+        st.subheader(f"{selected_month} の履歴")
+        st.dataframe(display_df.sort_values("日付", ascending=False)[["日付", "カテゴリー", "金額"]], use_container_width=True)
+        
         st.divider()
-        edit_idx = st.selectbox("削除するデータを選択", df.index, 
-                                format_func=lambda i: f"{df.loc[i, '日付'].strftime('%m/%d')} - {df.loc[i, 'カテゴリー']} ({int(df.loc[i, '金額']):,}円)")
+        # 削除は全データから選べるようにする（または表示中の月のみに限定）
+        edit_idx = st.selectbox("削除するデータを選択", display_df.index, 
+                                format_func=lambda i: f"{display_df.loc[i, '日付'].strftime('%m/%d')} - {display_df.loc[i, 'カテゴリー']} ({int(display_df.loc[i, '金額']):,}円)")
         if st.button("選択したデータを削除"):
             save_data(df.drop(edit_idx))
             st.rerun()
-
-with st.sidebar:
-    if st.button("全データをリセット"):
-        save_data(pd.DataFrame(columns=["日付", "カテゴリー", "金額"]))
-        st.rerun()
+    else:
+        st.write("履歴はありません")
